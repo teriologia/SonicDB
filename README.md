@@ -21,8 +21,8 @@ Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you
 
 ```bash
 npm install @teriologia/sonicdb
-
---
+```
+---
 
 ## 🚀 Quick Start (TypeScript)
 
