@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",         // Modern JavaScript'e derle
+    "module": "CommonJS",        // Node.js'in kullandığı modül sistemi
+    "strict": true,              // En iyi pratikler için katı tip kontrolü
+    "esModuleInterop": true,     // 'require' ve 'import' uyumluluğu
+
+    // --- PAKETLEME İÇİN EN KRİTİK AYARLAR ---
+    
+    // 1. Derlenen JS kodları bu klasöre çıkacak:
+    "outDir": "./dist",
+    
+    // 2. TS kaynak kodları bu klasörde:
+    "rootDir": "./src",
+
+    // 3. BU, TAM TS DESTEĞİ İÇİN ZORUNLUDUR! (.d.ts tip dosyalarını oluşturur)
+    "declaration": true
+  },
+  // Sadece 'src' klasöründeki kodları derlemesini söyle:
+  "include": ["src"]
+}

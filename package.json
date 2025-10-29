@@ -1,0 +1,40 @@
+{
+  "name": "@teriologia/sonicdb",
+  "version": "0.1.0",
+  "description": "Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you in and out instantly.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "database",
+    "in-memory",
+    "fast",
+    "index",
+    "mongoose",
+    "sonic",
+    "sonicdb",
+    "db",
+    "jsdb"
+  ],
+  "author": "Teriologia <Mehmetserdartekin@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teriologia/SonicDB.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/teriologia/SonicDB/issues"
+  },
+  "homepage": "https://github.com/teriologia/SonicDB#readme",
+  "devDependencies": {
+    "@types/node": "^24.9.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
