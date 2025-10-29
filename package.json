@@ -1,6 +1,6 @@
 {
   "name": "@teriologia/sonicdb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you in and out instantly.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,11 @@
     "sonic",
     "sonicdb",
     "db",
-    "jsdb"
+    "jsdb",
+    "teriologia",
+    "teriologiadb",
+    "@teriologia/sonicdb",
+    "@teriologia"
   ],
   "author": "Teriologia <Mehmetserdartekin@gmail.com>",
   "repository": {
