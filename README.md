@@ -1,4 +1,4 @@
-# SonicDB 💨
+# @teriologia/sonicdb 💨
 > Gotta query fast!
 
 Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you in and out instantly.
@@ -8,11 +8,11 @@ Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you
 
 ## Features
 
-* **⚡ Blazing Fast:** Uses Map-based indexing for instant $O(1)$ lookups on exact matches and `$in` queries.
+* **⚡ Advanced Indexing:** Choose between **`hash`** indexes (default) for instant $O(1)$ equality lookups and a zero-dependency, self-balancing **`btree`** index for high-speed $O(\log n)$ range queries (`$gt`, `$lt`, etc.).
 * **🔒 Type-Safe:** Fully written in TypeScript. Use Generics (`new SonicDB<IUser>()`) for complete auto-completion and type safety.
-* **✨ Rich Queries:** Supports advanced operators like `$gt`, `$gte`, `$lt`, `$lte`, `$ne`, `$in`, and `$nin`.
 * **🔐 Validation:** Built-in schema validation (`{ age: Number }`) and uniqueness constraints (`{ key: 'email', unique: true }`).
 * **🔄 Lifecycle Hooks:** Run custom logic *before* or *after* `create`, `update`, and `delete` events using `pre()` and `post()` hooks.
+* **🔍 Rich Queries:** Supports advanced operators like `$gt`, `$gte`, `$lt`, `$lte`, `$ne`, `$in`, and `$nin`.
 * **🚀 Full CRUD:** Complete `create`, `find`, `findOne`, `update`, `updateOne`, `delete`, `deleteMany` API.
 
 ---
@@ -26,7 +26,7 @@ npm install @teriologia/sonicdb
 
 ## 🚀 Quick Start (TypeScript)
 
-This example shows how to set up a database with validation, unique indexes, and lifecycle hooks.
+This example shows how to set up a database with validation, unique indexes, and the powerful `btree` index.
 
 ```typescript
 import SonicDB from '@teriologia/sonicdb';
@@ -48,12 +48,13 @@ const User = new SonicDB<IUser>({
     email: String,
     age: Number,
     id: Number,
-    isActive: Boolean
-    // Note: 'hobbies' (Array) is omitted for this quick start
   },
   indexOn: [
-    { key: 'email', unique: true }, // 'email' is indexed AND unique
-    'age' // 'age' is just indexed
+    // 'email' uses 'hash' (default) for fast O(1) lookups
+    { key: 'email', unique: true, type: 'hash' },
+    
+    // 'age' uses 'btree' for fast O(log n) range queries
+    { key: 'age', type: 'btree' }
   ]
 });
 
@@ -72,8 +73,6 @@ try {
     username: 'sonic_fast',
     email: 'sonic@gottagofast.com',
     age: 28,
-    isActive: true,
-    hobbies: ['running'] // 'hobbies' is not in the schema, but is still saved
   });
   
   User.create({
@@ -81,8 +80,6 @@ try {
     username: 'tails',
     email: 'tails@workshop.com',
     age: 29,
-    isActive: true,
-    hobbies: ['flying']
   });
 
   // This one will fail (unique email)
@@ -91,21 +88,18 @@ try {
     username: 'fake_sonic',
     email: 'sonic@gottagofast.com', // Duplicate email
     age: 99,
-    isActive: false,
-    hobbies: []
   });
   
 } catch (error) {
   console.error(`Error during creation: ${(error as Error).message}`);
-  // > Error during creation: Uniqueness Constraint Failed: A document with key 'email' and value 'sonic@gottagofast.com' already exists.
+  // > Error: Uniqueness Constraint Failed...
 }
 
 // 5. Query your data!
-// Find all users older than 28
-// This is a SLOW query (full scan) because we use $gt
+// This is a FAST query thanks to the B-Tree index
 console.log('\n--- Finding users older than 28 ---');
 const users = User.find({
-  age: { $gt: 28 }
+  age: { $gt: 28 } // This is accelerated by the 'btree' index
 });
 
 console.log(users);
@@ -140,33 +134,73 @@ try {
   });
 } catch (error) {
   console.error(error.message);
-  // > Schema Validation Failed: 'age' must be of type 'Number'. Received: string
+  // > Error: Schema Validation Failed: 'age' must be of type 'Number'...
 }
-
-User.create({
-  username: 'sonic_fast',
-  email: 'sonic@gottagofast.com',
-  age: 28
-});
-
-const sonic = User.findOne({ email: 'sonic@gottagofast.com' });
-console.log(sonic);
 ```
 
 ---
 
-## 📚 API
+## ⚡ Indexing Strategies (hash vs. btree)
+
+This is SonicDB's most powerful feature. You can choose two different indexing types via the `indexOn` option.
+
+**Rule:** If `type` is not specified (e.g., `'username'`), it defaults to **`'hash'`**.
+
+```typescript
+// Example of an advanced setup
+const db = new SonicDB({
+  indexOn: [
+    // 'email' for 'hash' (default)
+    { key: 'email', type: 'hash', unique: true },
+    
+    // 'age' for 'btree'
+    { key: 'age', type: 'btree' },
+
+    // 'username' also uses 'hash' (default)
+    'username'
+  ]
+});
+```
+
+### 1. `type: 'hash'` (Default)
+
+* **What it is:** Uses a JavaScript `Map` (Hash Map).
+* **Analogy:** A **coat check (vestibule)**. You get a ticket (`key`) and your coat is stored in a random location.
+* **Best for:**
+    * Equality (`=`) queries.
+    * `findOne({ email: '...' })` — $O(1)$ (Instant)
+    * `find({ age: { $in: [28, 30] } })` — $O(k)$ (Very Fast)
+* **Bad for:**
+    * Range (`>`, `<`) queries.
+    * A query like `find({ age: { $gt: 28 } })` **cannot** use this index (will cause a Full Scan).
+* **Use for:** `id`, `email`, `username` — keys you will search for by *exact* match.
+
+### 2. `type: 'btree'` (Sorted Index)
+
+* **What it is:** Uses a built-in, zero-dependency, self-balancing **B-Tree**.
+* **Analogy:** An **encyclopedia** or **phone book**. Data is kept sorted.
+* **Best for:**
+    * Range (`>`, `<`, `$gt`, `$lt`) queries.
+    * `find({ age: { $gt: 28 } })` — $O(\log n)$ (Very Fast)
+    * `find({ createdAt: { $lt: new Date() } })` — $O(\log n)$ (Very Fast)
+    * Also good for equality queries ($O(\log n)$).
+* **Trade-off:**
+    * `create` and `delete` operations are *slightly* slower ($O(\log n)$) than a hash map ($O(1)$) because the tree must be rebalanced.
+* **Use for:** `age`, `score`, `createdAt` — numbers or dates that you will query using range operators.
+
+---
+
+## 📚 API Reference
 
 ### `new SonicDB<T>(options)`
 
 Creates a new database instance.
 
 * `options.schema`: An object defining data types (e.g., `{ name: String, age: Number }`).
-* `options.indexOn`: An array of keys to index.
-    * Simple: `['age', 'username']`
-    * Advanced: `[{ key: 'email', unique: true }, 'age']`
+* `options.indexOn`: An array of keys to index (see Indexing Strategies).
+* `options.bTreeDegree`: (Optional) The minimum degree `t` for all B-Tree indexes (default: `2`).
 
-### Hooks
+### Lifecycle Hooks
 
 * `db.pre(event, callback)`: Runs *before* an event.
 * `db.post(event, callback)`: Runs *after* an event.
@@ -185,15 +219,15 @@ Creates a new database instance.
 
 ### Query Operators
 
-`find`, `findOne`, `update`, and `delete` methods support the following operators in the query object:
+All CRUD methods support the following operators:
 
-* `{ age: { $gt: 18 } }` (Greater Than)
-* `{ age: { $gte: 18 } }` (Greater Than or Equal)
-* `{ age: { $lt: 30 } }` (Less Than)
-* `{ age: { $lte: 30 } }` (Less Than or Equal)
-* `{ email: { $ne: 'test@test.com' } }` (Not Equal)
-* `{ age: { $in: [18, 21, 25] } }` (In Array - **Indexed!**)
-* `{ hobbies: { $nin: ['coding'] } }` (Not In Array)
+* `{ age: { $gt: 18 } }` (Greater Than - **Fast with `btree`**)
+* `{ age: { $gte: 18 } }` (Greater Than or Equal - **Fast with `btree`**)
+* `{ age: { $lt: 30 } }` (Less Than - **Fast with `btree`**)
+* `{ age: { $lte: 30 } }` (Less Than or Equal - **Fast with `btree`**)
+* `{ email: { $ne: 'test@test.com' } }` (Not Equal - *Slow (Full Scan)*)
+* `{ age: { $in: [18, 21, 25] } }` (In Array - **Fast with `hash` or `btree`**)
+* `{ hobbies: { $nin: ['coding'] } }` (Not In Array - *Slow (Full Scan)*)
 
 ---
 
