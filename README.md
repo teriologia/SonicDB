@@ -108,34 +108,107 @@ console.log(users);
 
 ### JavaScript (CommonJS) Usage
 
-`SonicDB` works great in plain JavaScript, where schema validation becomes even more important.
+`SonicDB` works great in plain JavaScript. This example mirrors the TypeScript Quick Start, showing how schema validation and hooks work at runtime.
 
 ```javascript
 // Note: .default is required when using CommonJS
 const SonicDB = require('@teriologia/sonicdb').default;
 
+// (Optional but recommended) Use JSDoc for type-hinting in your editor
+/**
+ * @typedef {object} IUser
+ * @property {number} id
+ * @property {string} username
+ * @property {string} email
+ * @property {number} age
+ * @property {Date} [createdAt]
+ * @property {Date} [updatedAt]
+ */
+
+// 1. Initialize the DB with schema and indexes
 const User = new SonicDB({
   schema: {
     username: String,
     email: String,
     age: Number,
+    id: Number,
   },
   indexOn: [
-    { key: 'email', unique: true }
+    // 'email' uses 'hash' (default) for fast O(1) lookups
+    { key: 'email', unique: true, type: 'hash' },
+    
+    // 'age' uses 'btree' for fast O(log n) range queries
+    { key: 'age', type: 'btree' }
   ]
 });
 
+// 2. Register a 'pre:create' hook for timestamps
+User.pre('create', (doc) => {
+  const now = new Date();
+  doc.createdAt = now;
+  doc.updatedAt = now;
+  console.log(`Hook: Setting timestamps for ${doc.username}`);
+});
+
+// 3. Create data
 try {
-  // This will throw an error
   User.create({
+    id: 1,
+    username: 'sonic_fast',
+    email: 'sonic@gottagofast.com',
+    age: 28,
+  });
+  
+  User.create({
+    id: 2,
+    username: 'tails',
+    email: 'tails@workshop.com',
+    age: 29,
+  });
+
+} catch (error) {
+  // This block should not be hit
+  console.error(`Error during valid creation: ${error.message}`);
+}
+
+// 4. Test Validation (Uniqueness)
+try {
+  console.log('\n--- Intentionally triggering a uniqueness error... ---');
+  User.create({
+    id: 3,
+    username: 'fake_sonic',
+    email: 'sonic@gottagofast.com', // Duplicate email
+    age: 99,
+  });
+  
+} catch (error) {
+  console.error(`Error during creation: ${error.message}`);
+  // > Error: Uniqueness Constraint Failed: A document with key 'email' and value 'sonic@gottagofast.com' already exists.
+}
+
+// 5. Test Validation (Schema)
+try {
+  console.log('\n--- Intentionally triggering a schema error... ---');
+  User.create({
+    id: 4,
     username: 'bad_data',
-    email: 'test@test.com',
-    age: "twenty" // This is a string, not a Number
+    email: 'bad@data.com',
+    age: "thirty" // This is a string, not a Number
   });
 } catch (error) {
-  console.error(error.message);
-  // > Error: Schema Validation Failed: 'age' must be of type 'Number'...
+    console.error(`Error during creation: ${error.message}`);
+  // > Error: Schema Validation Failed: 'age' must be of type 'Number'. Received: string
 }
+
+// 6. Query your data!
+// This is a FAST query thanks to the B-Tree index
+console.log('\n--- Finding users older than 28 ---');
+const users = User.find({
+  age: { $gt: 28 } // This is accelerated by the 'btree' index
+});
+
+console.log(users);
+// Output: [ { id: 2, username: 'tails', ..., createdAt: ... } ]
 ```
 
 ---
