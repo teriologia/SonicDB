@@ -9,6 +9,7 @@ Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you
 ## Features
 
 * **⚡ Advanced Indexing:** Choose between **`hash`** indexes (default) for instant $O(1)$ equality lookups and a zero-dependency, self-balancing **`btree`** index for high-speed $O(\log n)$ range queries (`$gt`, `$lt`, etc.).
+* **⏱️ Query Caching:** Automatically caches results of `find()` queries. Identical queries return instantly from memory (Cache Hit).
 * **🔒 Type-Safe:** Fully written in TypeScript. Use Generics (`new SonicDB<IUser>()`) for complete auto-completion and type safety.
 * **🔐 Validation:** Built-in schema validation (`{ age: Number }`) and uniqueness constraints (`{ key: 'email', unique: true }`).
 * **🔄 Lifecycle Hooks:** Run custom logic *before* or *after* `create`, `update`, and `delete` events using `pre()` and `post()` hooks.
@@ -55,7 +56,9 @@ const User = new SonicDB<IUser>({
     
     // 'age' uses 'btree' for fast O(log n) range queries
     { key: 'age', type: 'btree' }
-  ]
+  ],
+  // Query caching is enabled by default
+  enableQueryCache: true
 });
 
 // 3. Register a 'pre:create' hook for timestamps
@@ -263,6 +266,26 @@ const db = new SonicDB({
 
 ---
 
+## ⏱️ Automatic Query Caching
+
+SonicDB includes a built-in query cache for `find()` operations, which is **enabled by default**.
+
+* **How it works:** The *first time* you run a specific `find()` query (e.g., `find({ age: { $gt: 28 } })`), SonicDB performs the full operation (Full Scan or B-Tree scan) and stores the result in an in-memory cache.
+* **Cache Hit:** The *next time* you run that *exact same query*, SonicDB skips the scan entirely and returns the cached result instantly (Cache Hit).
+* **Invalidation:** The cache is **automatically and completely cleared** after any data-modifying operation (`create`, `update`, `delete`, `loadData`). This ensures your data is never stale.
+
+### Disabling the Cache
+
+You can disable this behavior in the constructor for write-heavy workloads:
+
+```typescript
+const db = new SonicDB({
+  enableQueryCache: false
+});
+```
+
+---
+
 ## 📚 API Reference
 
 ### `new SonicDB<T>(options)`
@@ -272,6 +295,7 @@ Creates a new database instance.
 * `options.schema`: An object defining data types (e.g., `{ name: String, age: Number }`).
 * `options.indexOn`: An array of keys to index (see Indexing Strategies).
 * `options.bTreeDegree`: (Optional) The minimum degree `t` for all B-Tree indexes (default: `2`).
+* `options.enableQueryCache`: (Optional) Set to `true` (default) to cache `find()` query results. Set to `false` to disable.
 
 ### Lifecycle Hooks
 
