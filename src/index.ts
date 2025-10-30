@@ -29,7 +29,8 @@ type Query<T> = {
 interface SonicDBOptions {
   schema?: SchemaDefinition;
   indexOn?: IndexOptions[];
-  bTreeDegree?: number;
+  bTreeDegree?: number; // Allow configuration of 't'
+  enableQueryCache?: boolean; // Option to turn caching on/off
 }
 // Hook types
 type HookEvent = 'create' | 'update' | 'delete';
@@ -56,12 +57,21 @@ class SonicDB<T extends Document = Document> {
   private data: (T | null)[];
   private hooks: { [key: string]: Function[] } = {};
 
+  // --- Query Cache Properties ---
+  private queryCache: Map<string, number[]>;
+  private cacheEnabled: boolean;
+  // --- End of Cache Properties ---
+
   constructor(options: SonicDBOptions = {}) {
     this.schema = options.schema || {};
     this.uniqueKeys = new Set<string>();
     this.data = [];
     this.hooks = {};
     this.bTreeDegree = options.bTreeDegree || 2;
+    
+    // Initialize Cache
+    this.cacheEnabled = options.enableQueryCache ?? true; // Default to ON
+    this.queryCache = new Map<string, number[]>();
     
     this.indexTypes = new Map<string, IndexType>();
     this.hashIndexes = {};
@@ -85,7 +95,21 @@ class SonicDB<T extends Document = Document> {
     }
   }
 
+  // --- PRIVATE CACHE INVALIDATION ---
+  
+  /**
+   * [Private] Clears the query cache.
+   * Called by any method that modifies data (create, update, delete).
+   */
+  private _invalidateCache(): void {
+    if (this.cacheEnabled) {
+      this.queryCache.clear();
+      // console.log("SonicDB Debug: Query cache invalidated.");
+    }
+  }
+
   // --- PRIVATE VALIDATION & UNIQUENESS HELPERS ---
+
   /**
    * [Private] Validates a document (or part of one) against the schema.
    */
@@ -200,10 +224,12 @@ class SonicDB<T extends Document = Document> {
 
   // --- PRIVATE QUERY ENGINE ---
   
-  private _findIndices(query: Query<T>): number[] {
+  /**
+   * [Private] The actual query logic (formerly _findIndices).
+   * This is now separate so _findIndices can manage the cache.
+   */
+  private _runQuery(query: Query<T>): number[] {
     const results: number[] = [];
-    
-    // UPDATED (FIX for Error 4): Object.keys returns string[]
     const queryKeys = Object.keys(query) as string[];
     
     if (queryKeys.length === 0) {
@@ -213,16 +239,12 @@ class SonicDB<T extends Document = Document> {
       return results;
     }
     
-    // UPDATED (FIX for Error 4): bestPath.key is now 'string'
     let bestPath: { key: string, type: IndexType, operator: string } | null = null;
     let bestPathRank = 3; 
 
     for (const key of queryKeys) {
-      // 'key' is a string, which is correct
       const keyType = this.indexTypes.get(key);
-      if (!keyType) continue;
-      
-      // UPDATED (FIX for Error 4): Use 'as keyof T' for type-safe access
+      if (!keyType) continue; 
       const queryValue = query[key as keyof T];
       const isOperatorObject = typeof queryValue === 'object' && queryValue !== null && !Array.isArray(queryValue);
 
@@ -249,7 +271,6 @@ class SonicDB<T extends Document = Document> {
       const indexMap = this.hashIndexes[bestPath.key];
       const queryValue = query[bestPath.key as keyof T] as any;
       const candidateIndices = new Set<number>();
-      
       if (bestPath.operator === '$in' && Array.isArray(queryValue.$in)) {
         for (const val of queryValue.$in) {
           const indices = indexMap.get(val);
@@ -259,7 +280,6 @@ class SonicDB<T extends Document = Document> {
         const indices = indexMap.get(queryValue);
         if (indices) indices.forEach(i => candidateIndices.add(i));
       }
-      
       for (const index of candidateIndices) {
         const doc = this.data[index];
         if (doc === null) continue;
@@ -283,22 +303,16 @@ class SonicDB<T extends Document = Document> {
           if (indices) indices.forEach(i => candidateIndices.add(i));
         }
       } else {
-        const range = {
-          $gt: op.$gt, $gte: op.$gte,
-          $lt: op.$lt, $lte: op.$lte,
-        };
+        const range = { $gt: op.$gt, $gte: op.$gte, $lt: op.$lt, $lte: op.$lte };
         indexTree.range(range, (key, values) => {
           values.forEach(i => candidateIndices.add(i));
         });
         if (op.$ne !== undefined) {
           indexTree.range({}, (key, values) => {
-            if (key !== op.$ne) {
-              values.forEach(i => candidateIndices.add(i));
-            }
+            if (key !== op.$ne) values.forEach(i => candidateIndices.add(i));
           });
         }
       }
-      
       for (const index of candidateIndices) {
         const doc = this.data[index];
         if (doc === null) continue;
@@ -307,7 +321,6 @@ class SonicDB<T extends Document = Document> {
       return results;
     }
 
-    // Path 3: SLOW (Full Scan - O(n))
     console.warn(`SonicDB Warning: Query is not acceleratable by any index. Performing full scan:`, query);
     for (let i = 0; i < this.data.length; i++) {
       const doc = this.data[i];
@@ -317,13 +330,38 @@ class SonicDB<T extends Document = Document> {
     return results;
   }
   
+  /**
+   * [Private] Finds all indices, using the cache if enabled.
+   */
+  private _findIndices(query: Query<T>): number[] {
+    if (this.cacheEnabled) {
+      const cacheKey = JSON.stringify(query);
+      const cachedResult = this.queryCache.get(cacheKey);
+      if (cachedResult) {
+        return cachedResult;
+      }
+      
+      const results = this._runQuery(query);
+      this.queryCache.set(cacheKey, results);
+      return results;
+
+    } else {
+      return this._runQuery(query);
+    }
+  }
+
+  /**
+   * [Private] Finds the first index, using the cache logic (less efficient).
+   */
   private _findIndex(query: Query<T>): number {
     const indices = this._findIndices(query);
     return indices.length > 0 ? indices[0] : -1;
   }
   
+  /**
+   * [Private] Checks if a doc matches a query.
+   */
   private docMatchesQuery(doc: T, query: Query<T>): boolean {
-    // UPDATED (FIX for Error 4): 'key' is string
     for (const key in query) {
       if (query.hasOwnProperty(key)) {
         const docValue = doc[key as keyof T];
@@ -381,6 +419,7 @@ class SonicDB<T extends Document = Document> {
     const newIndex = this.data.length;
     this.data.push(doc);
     this._addToIndexes(doc, newIndex);
+    this._invalidateCache(); 
     this._runHooks(`post:create`, doc);
     return doc;
   }
@@ -391,9 +430,12 @@ class SonicDB<T extends Document = Document> {
       if (type === 'hash') this.hashIndexes[key].clear();
       else if (type === 'btree') this.btreeIndexes[key] = new BTree(this.bTreeDegree);
     });
-    for (const doc of dataArray) {
-      this.create(doc);
+    for (let i = 0; i < dataArray.length; i++) {
+        const doc = dataArray[i];
+        this.data.push(doc);
+        this._addToIndexes(doc, i);
     }
+    this._invalidateCache(); 
     console.log(`SonicDB: ${this.data.length} documents loaded and indexed.`);
   }
 
@@ -423,6 +465,7 @@ class SonicDB<T extends Document = Document> {
     const newDoc = { ...oldDoc, ...update };
     this.data[indexToUpdate] = newDoc;
     this._addToIndexes(newDoc, indexToUpdate);
+    this._invalidateCache(); 
     this._runHooks(`post:update`, query, { modifiedCount: 1 });
     return newDoc;
   }
@@ -432,6 +475,12 @@ class SonicDB<T extends Document = Document> {
     this._validate(update);
     const indicesToUpdate = this._findIndices(query);
     let modifiedCount = 0;
+    
+    if (indicesToUpdate.length === 0) {
+       this._runHooks(`post:update`, query, { modifiedCount: 0 });
+       return { modifiedCount: 0 };
+    }
+    
     for (const index of indicesToUpdate) {
       try {
         this._checkUniqueness(update, index);
@@ -445,6 +494,11 @@ class SonicDB<T extends Document = Document> {
         console.error(`SonicDB Error: Could not update document at index ${index} due to: ${(error as Error).message}`);
       }
     }
+    
+    if (modifiedCount > 0) {
+        this._invalidateCache(); 
+    }
+    
     const result = { modifiedCount };
     this._runHooks(`post:update`, query, result);
     return result;
@@ -460,6 +514,7 @@ class SonicDB<T extends Document = Document> {
     const docToDelete = this.data[indexToDelete] as T;
     this._removeFromIndexes(docToDelete, indexToDelete);
     this.data[indexToDelete] = null;
+    this._invalidateCache(); 
     const result = { deletedCount: 1 };
     this._runHooks(`post:delete`, query, result);
     return result;
@@ -475,8 +530,9 @@ class SonicDB<T extends Document = Document> {
     for (const index of indicesToDelete) {
       const docToDelete = this.data[index] as T;
       this._removeFromIndexes(docToDelete, index);
-      this.data[index] = null; 
+      this.data[index] = null;
     }
+    this._invalidateCache(); 
     const result = { deletedCount: indicesToDelete.length };
     this._runHooks(`post:delete`, query, result);
     return result;
