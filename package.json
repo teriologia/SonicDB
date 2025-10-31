@@ -1,15 +1,29 @@
 {
   "name": "@teriologia/sonicdb",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you in and out instantly.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/mjs/index.d.ts",
+        "default": "./dist/mjs/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "clean": "rimraf dist",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:mjs": "tsc -p tsconfig.mjs.json",
+    "build": "npm run clean && npm run build:cjs && npm run build:mjs"
   },
   "keywords": [
     "database",
@@ -38,6 +52,7 @@
   "homepage": "https://github.com/teriologia/SonicDB#readme",
   "devDependencies": {
     "@types/node": "^24.9.2",
+    "rimraf": "^6.1.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
