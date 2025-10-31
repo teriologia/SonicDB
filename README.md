@@ -25,9 +25,9 @@ npm install @teriologia/sonicdb
 ```
 ---
 
-## 🚀 Quick Start (TypeScript)
+## 🚀 Quick Start (TypeScript / ESM)
 
-This example shows how to set up a database with validation, unique indexes, and the powerful `btree` index.
+This is the recommended approach for modern applications (TypeScript, Vite, Next.js, or Node.js in "module" mode).
 
 ```typescript
 import SonicDB from '@teriologia/sonicdb';
@@ -109,12 +109,13 @@ console.log(users);
 // Output: [ { id: 2, username: 'tails', ..., createdAt: ... } ]
 ```
 
-### JavaScript (CommonJS) Usage
+### JavaScript (CommonJS / CJS) Usage
 
-`SonicDB` works great in plain JavaScript. This example mirrors the TypeScript Quick Start, showing how schema validation and hooks work at runtime.
+This approach is for traditional Node.js environments that use `require()`.
 
 ```javascript
-// Note: .default is required when using CommonJS
+// Our CJS build exposes the default export on the '.default' property.
+// This is the standard way to import a default export in CommonJS.
 const SonicDB = require('@teriologia/sonicdb').default;
 
 // (Optional but recommended) Use JSDoc for type-hinting in your editor
@@ -137,10 +138,7 @@ const User = new SonicDB({
     id: Number,
   },
   indexOn: [
-    // 'email' uses 'hash' (default) for fast O(1) lookups
     { key: 'email', unique: true, type: 'hash' },
-    
-    // 'age' uses 'btree' for fast O(log n) range queries
     { key: 'age', type: 'btree' }
   ]
 });
@@ -150,10 +148,9 @@ User.pre('create', (doc) => {
   const now = new Date();
   doc.createdAt = now;
   doc.updatedAt = now;
-  console.log(`Hook: Setting timestamps for ${doc.username}`);
 });
 
-// 3. Create data
+// 3. Create data and test validation
 try {
   User.create({
     id: 1,
@@ -162,35 +159,7 @@ try {
     age: 28,
   });
   
-  User.create({
-    id: 2,
-    username: 'tails',
-    email: 'tails@workshop.com',
-    age: 29,
-  });
-
-} catch (error) {
-  // This block should not be hit
-  console.error(`Error during valid creation: ${error.message}`);
-}
-
-// 4. Test Validation (Uniqueness)
-try {
-  console.log('\n--- Intentionally triggering a uniqueness error... ---');
-  User.create({
-    id: 3,
-    username: 'fake_sonic',
-    email: 'sonic@gottagofast.com', // Duplicate email
-    age: 99,
-  });
-  
-} catch (error) {
-  console.error(`Error during creation: ${error.message}`);
-  // > Error: Uniqueness Constraint Failed: A document with key 'email' and value 'sonic@gottagofast.com' already exists.
-}
-
-// 5. Test Validation (Schema)
-try {
+  // 4. Test Validation (Schema)
   console.log('\n--- Intentionally triggering a schema error... ---');
   User.create({
     id: 4,
@@ -203,15 +172,10 @@ try {
   // > Error: Schema Validation Failed: 'age' must be of type 'Number'. Received: string
 }
 
-// 6. Query your data!
-// This is a FAST query thanks to the B-Tree index
-console.log('\n--- Finding users older than 28 ---');
-const users = User.find({
-  age: { $gt: 28 } // This is accelerated by the 'btree' index
-});
-
-console.log(users);
-// Output: [ { id: 2, username: 'tails', ..., createdAt: ... } ]
+// 5. Query your data!
+console.log('\n--- Finding user "sonic_fast" ---');
+const sonic = User.findOne({ email: 'sonic@gottagofast.com' }); // Fast Hash lookup
+console.log(sonic);
 ```
 
 ---
