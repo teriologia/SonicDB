@@ -10,6 +10,7 @@ Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you
 
 * **⚡ Advanced Indexing:** Choose between **`hash`** indexes (default) for instant $O(1)$ equality lookups and a zero-dependency, self-balancing **`btree`** index for high-speed $O(\log n)$ range queries (`$gt`, `$lt`, etc.).
 * **⏱️ Query Caching:** Automatically caches results of `find()` queries. Identical queries return instantly from memory (Cache Hit).
+* **🌀 Reactivity (NEW!):** "Observe" queries (`find$`) to get live, automatic updates in your UI (e.g., in React) when data changes.
 * **🔒 Type-Safe:** Fully written in TypeScript. Use Generics (`new SonicDB<IUser>()`) for complete auto-completion and type safety.
 * **🔐 Validation:** Built-in schema validation (`{ age: Number }`) and uniqueness constraints (`{ key: 'email', unique: true }`).
 * **🔄 Lifecycle Hooks:** Run custom logic *before* or *after* `create`, `update`, and `delete` events using `pre()` and `post()` hooks.

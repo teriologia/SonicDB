@@ -1,6 +1,6 @@
 {
   "name": "@teriologia/sonicdb",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Stop treating your queries like a 'Labyrinth Zone' water level. SonicDB gets you in and out instantly.",
   "main": "./dist/cjs/index.js",
   "types": "./dist/cjs/index.d.ts",
