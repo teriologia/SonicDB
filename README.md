@@ -296,6 +296,81 @@ const db = new SonicDB({
 
 ---
 
+## 🌀 Reactivity (Live Queries)
+
+This is the killer feature for modern UI frameworks like React or React Native.
+
+`db.find()` is static—it returns a "snapshot" of the data at that moment.
+`db.find$()` is **reactive**—it returns an "observable" object that gives you the *live results* of the query, automatically updating whenever the data changes.
+
+### Example with React
+
+This makes `SonicDB` a powerful local state management tool.
+
+```jsx
+import React, { useState, useEffect, useMemo } from 'react';
+import SonicDB from '@teriologia/sonicdb';
+
+// (Define interface IUser...)
+
+// 1. Create a single DB instance (useMemo ensures it's only created once)
+const db = new SonicDB<IUser>({
+  indexOn: ['isActive']
+});
+
+// 2. A React component
+function UserList() {
+  // 3. Create a state to hold the list of users
+  const [users, setUsers] = useState<IUser[]>([]);
+
+  // 4. Subscribe to the query when the component mounts
+  useEffect(() => {
+    console.log("Subscribing to 'isActive: true' query...");
+    
+    // Use 'find$()' to get a live query
+    const subscription = db
+      .find$({ isActive: true })
+      .subscribe(activeUsers => {
+        // This callback fires immediately, and again
+        // EVERY time a 'create', 'update', or 'delete'
+        // changes the result of this query.
+        console.log("Data changed, React UI is updating!");
+        setUsers(activeUsers);
+      });
+
+    // 5. Unsubscribe when the component unmounts
+    return () => {
+      console.log("Unsubscribing...");
+      subscription.unsubscribe();
+    };
+  }, []); // The empty array [] ensures this runs only once
+
+  // Function to add a new user
+  const addUser = () => {
+    // This 'create' will AUTOMATICALLY trigger the
+    // 'subscribe' callback above and update the UI.
+    db.create({
+      id: Math.random(),
+      username: 'new_user',
+      isActive: true
+    });
+  };
+
+  return (
+    <div>
+      <button onClick={addUser}>Add Active User</button>
+      <ul>
+        {users.map(user => (
+          <li key={user.id}>{user.username}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+---
+
 ## 📚 API Reference
 
 ### `new SonicDB<T>(options)`
@@ -318,6 +393,7 @@ Creates a new database instance.
 * `db.create(doc: T): T`
 * `db.find(query: Query<T>): T[]`
 * `db.findOne(query: Query<T>): T | null`
+* `db.find$(query: Query<T>): { subscribe: (callback) => Subscription }`
 * `db.updateOne(query: Query<T>, update: Partial<T>): T | null`
 * `db.updateMany(query: Query<T>, update: Partial<T>): { modifiedCount: number }`
 * `db.deleteOne(query: Query<T>): { deletedCount: number }`

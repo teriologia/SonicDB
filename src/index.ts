@@ -1,122 +1,91 @@
-import { BTree } from './structures/btree';
 
-// --- Types and Interfaces ---
-type Document = Record<string, any>;
-// Define a schema as a map of field names to constructors
-type SchemaDefinition = Record<
-  string,
-  | StringConstructor
-  | NumberConstructor
-  | BooleanConstructor
-  | ArrayConstructor
-  | ObjectConstructor
->;
-type IndexType = 'hash' | 'btree';
-type IndexObject = {
-  key: string;
-  unique?: boolean;
-  type?: IndexType;
-};
-type IndexOptions = string | IndexObject;
+import { QueryEngine } from './core/QueryEngines';
 
-type QueryOperators<T_Field> = {
-  $gt?: T_Field; $gte?: T_Field; $lt?: T_Field; $lte?: T_Field;
-  $ne?: T_Field; $in?: T_Field[]; $nin?: T_Field[];
-};
-type Query<T> = {
-  [K in keyof T]?: T[K] | QueryOperators<T[K]>;
-};
-interface SonicDBOptions {
-  schema?: SchemaDefinition;
-  indexOn?: IndexOptions[];
-  bTreeDegree?: number; // Allow configuration of 't'
-  enableQueryCache?: boolean; // Option to turn caching on/off
-}
-// Hook types
-type HookEvent = 'create' | 'update' | 'delete';
-type PreCreateCallback<T> = (doc: T) => void;
-type PostCreateCallback<T> = (doc: T) => void;
-type PreUpdateCallback<T> = (query: Query<T>, update: Partial<T>) => void;
-type PostUpdateCallback<T> = (query: Query<T>, result: { modifiedCount: number }) => void;
-type PreDeleteCallback<T> = (query: Query<T>) => void;
-type PostDeleteCallback<T> = (query: Query<T>, result: { deletedCount: number }) => void;
+import {
+  Document,
+  SchemaDefinition,
+  Query,
+  SonicDBOptions,
+  HookEvent,
+  PreCreateCallback,
+  PostCreateCallback,
+  PreUpdateCallback,
+  PostUpdateCallback,
+  PreDeleteCallback,
+  PostDeleteCallback,
+  Subscription,
+  InternalSubscription 
+} from './core/types';
 
 
 /**
  * SonicDB Main Class
+ * The public-facing API and "orchestrator" for the database.
  */
 class SonicDB<T extends Document = Document> {
+  // --- Core Systems ---
+  private engine: QueryEngine<T>;
   private schema: SchemaDefinition;
-  private uniqueKeys: Set<string>;
   
-  private indexTypes: Map<string, IndexType>;
-  private hashIndexes: Record<string, Map<any, number[]>>;
-  private btreeIndexes: Record<string, BTree<any, number[]>>;
-  private bTreeDegree: number;
-  
+  // --- Data & State ---
   private data: (T | null)[];
+  
+  // --- Add-on Systems ---
   private hooks: { [key: string]: Function[] } = {};
-
-  // --- Query Cache Properties ---
   private queryCache: Map<string, number[]>;
   private cacheEnabled: boolean;
-  // --- End of Cache Properties ---
+  
+  // NEW: Reactivity Property
+  private subscriptions: InternalSubscription<T>[] = [];
 
   constructor(options: SonicDBOptions = {}) {
     this.schema = options.schema || {};
-    this.uniqueKeys = new Set<string>();
     this.data = [];
     this.hooks = {};
-    this.bTreeDegree = options.bTreeDegree || 2;
     
     // Initialize Cache
-    this.cacheEnabled = options.enableQueryCache ?? true; // Default to ON
+    this.cacheEnabled = options.enableQueryCache ?? true;
     this.queryCache = new Map<string, number[]>();
     
-    this.indexTypes = new Map<string, IndexType>();
-    this.hashIndexes = {};
-    this.btreeIndexes = {};
+    // Initialize the Engine
+    this.engine = new QueryEngine<T>(
+      options.indexOn || [],
+      options.bTreeDegree || 2
+    );
+  }
 
-    if (options.indexOn) {
-      for (const option of options.indexOn) {
-        let key: string, isUnique = false, type: IndexType = 'hash';
-        if (typeof option === 'string') key = option;
-        else { key = option.key; if (option.unique) isUnique = true; if (option.type) type = option.type; }
-        
-        this.indexTypes.set(key, type);
-        if (isUnique) this.uniqueKeys.add(key);
-
-        if (type === 'hash') {
-          this.hashIndexes[key] = new Map<any, number[]>();
-        } else if (type === 'btree') {
-          this.btreeIndexes[key] = new BTree<any, number[]>(this.bTreeDegree);
+  // --- PRIVATE HELPERS (Cache, Validation, Hooks) ---
+  
+  private _notifyChanges(): void {
+    // 1. Invalidate the static query cache
+    if (this.cacheEnabled) {
+      this.queryCache.clear();
+      // console.log("SonicDB Debug: Query cache invalidated.");
+    }
+    
+    // 2. Notify all active subscribers (Reactivity)
+    if (this.subscriptions.length > 0) {
+      // console.log(`SonicDB Debug: Notifying ${this.subscriptions.length} subscribers.`);
+      
+      // Re-run every active "live" query
+      for (const sub of this.subscriptions) {
+        try {
+          // Re-run the query. This will be a cache-miss
+          const newResults = this.find(sub.query); 
+          
+          sub.callback(newResults);
+        } catch (error) {
+          console.error(`SonicDB Error: Failed to update subscription for query:`, sub.query, error);
         }
       }
     }
   }
 
-  // --- PRIVATE CACHE INVALIDATION ---
-  
-  /**
-   * [Private] Clears the query cache.
-   * Called by any method that modifies data (create, update, delete).
-   */
-  private _invalidateCache(): void {
-    if (this.cacheEnabled) {
-      this.queryCache.clear();
-      // console.log("SonicDB Debug: Query cache invalidated.");
-    }
-  }
-
-  // --- PRIVATE VALIDATION & UNIQUENESS HELPERS ---
-
   /**
    * [Private] Validates a document (or part of one) against the schema.
    */
   private _validate(doc: Partial<T>): void {
-    if (!this.schema || Object.keys(this.schema).length === 0) {
-      return; // No schema defined, skip validation
-    }
+    if (!this.schema || Object.keys(this.schema).length === 0) return;
     
     for (const key in this.schema) {
       if (doc.hasOwnProperty(key)) {
@@ -138,196 +107,18 @@ class SonicDB<T extends Document = Document> {
       }
     }
   }
-
-  /**
-   * [Private] Checks a document (or part of one) for uniqueness violations.
-   */
-  private _checkUniqueness(doc: Partial<T>, existingDocIndex: number = -1): void {
-    if (this.uniqueKeys.size === 0) return;
-    for (const key of this.uniqueKeys) {
-      if (doc.hasOwnProperty(key)) {
-        const value = doc[key as keyof T];
-        const type = this.indexTypes.get(key);
-        let indexList: number[] | undefined;
-
-        if (type === 'hash') {
-          indexList = this.hashIndexes[key]?.get(value);
-        } else if (type === 'btree') {
-          indexList = this.btreeIndexes[key]?.search(value);
-        }
-        
-        if (indexList) {
-          const conflict = indexList.some(index => index !== existingDocIndex);
-          if (conflict) {
-            throw new Error(`Uniqueness Constraint Failed: A document with key '${key}' and value '${value}' already exists.`);
-          }
-        }
-      }
-    }
-  }
-
-
-  // --- PRIVATE INDEXING HELPERS ---
-
-  private _addToIndexes(doc: T, numericalIndex: number): void {
-    for (const key of this.indexTypes.keys()) {
-      if (doc.hasOwnProperty(key)) {
-        const value = doc[key as keyof T];
-        const type = this.indexTypes.get(key);
-
-        if (type === 'hash') {
-          const indexMap = this.hashIndexes[key];
-          const indexList = indexMap.get(value) || [];
-          indexList.push(numericalIndex);
-          indexMap.set(value, indexList);
-        } 
-        else if (type === 'btree') {
-          const indexTree = this.btreeIndexes[key];
-          const indexList = indexTree.search(value) || [];
-          indexList.push(numericalIndex);
-          indexTree.insert(value, indexList);
-        }
-      }
-    }
-  }
-
-  private _removeFromIndexes(doc: T, numericalIndex: number): void {
-    for (const key of this.indexTypes.keys()) {
-      if (doc.hasOwnProperty(key)) {
-        const value = doc[key as keyof T];
-        const type = this.indexTypes.get(key);
-
-        if (type === 'hash') {
-          const indexMap = this.hashIndexes[key];
-          const indexList = indexMap.get(value);
-          if (indexList) {
-            const newList = indexList.filter(i => i !== numericalIndex);
-            if (newList.length > 0) indexMap.set(value, newList);
-            else indexMap.delete(value);
-          }
-        } 
-        else if (type === 'btree') {
-          const indexTree = this.btreeIndexes[key];
-          const indexList = indexTree.search(value);
-          if (indexList) {
-            const newList = indexList.filter(i => i !== numericalIndex);
-            if (newList.length > 0) {
-              indexTree.insert(value, newList);
-            } else {
-              indexTree.delete(value);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // --- PRIVATE QUERY ENGINE ---
   
   /**
-   * [Private] The actual query logic (formerly _findIndices).
-   * This is now separate so _findIndices can manage the cache.
+   * [Private] Runs all registered hooks for a specific event.
    */
-  private _runQuery(query: Query<T>): number[] {
-    const results: number[] = [];
-    const queryKeys = Object.keys(query) as string[];
-    
-    if (queryKeys.length === 0) {
-      for (let i = 0; i < this.data.length; i++) {
-        if (this.data[i] !== null) results.push(i);
-      }
-      return results;
-    }
-    
-    let bestPath: { key: string, type: IndexType, operator: string } | null = null;
-    let bestPathRank = 3; 
-
-    for (const key of queryKeys) {
-      const keyType = this.indexTypes.get(key);
-      if (!keyType) continue; 
-      const queryValue = query[key as keyof T];
-      const isOperatorObject = typeof queryValue === 'object' && queryValue !== null && !Array.isArray(queryValue);
-
-      if (keyType === 'hash') {
-        if (!isOperatorObject || (queryValue as any).$in) {
-          bestPath = { key, type: 'hash', operator: isOperatorObject ? '$in' : 'exact' };
-          bestPathRank = 1;
-          break;
-        }
-      } 
-      else if (keyType === 'btree') {
-        if (!isOperatorObject || Object.keys(queryValue).some(op => ['$in', '$gt', '$gte', '$lt', '$lte', '$ne'].includes(op))) {
-          if (bestPathRank > 2) {
-            bestPath = { key, type: 'btree', operator: 'range' };
-            bestPathRank = 2;
-          }
-        }
+  private _runHooks(key: string, ...args: any[]): void {
+    const fns = this.hooks[key];
+    if (fns) {
+      for (const fn of fns) {
+        try { fn(...args); }
+        catch (error) { console.error(`SonicDB Hook Error (${key}): ${(error as Error).message}`); }
       }
     }
-    
-    // --- QUERY EXECUTION ---
-    
-    if (bestPath?.type === 'hash') {
-      const indexMap = this.hashIndexes[bestPath.key];
-      const queryValue = query[bestPath.key as keyof T] as any;
-      const candidateIndices = new Set<number>();
-      if (bestPath.operator === '$in' && Array.isArray(queryValue.$in)) {
-        for (const val of queryValue.$in) {
-          const indices = indexMap.get(val);
-          if (indices) indices.forEach(i => candidateIndices.add(i));
-        }
-      } else {
-        const indices = indexMap.get(queryValue);
-        if (indices) indices.forEach(i => candidateIndices.add(i));
-      }
-      for (const index of candidateIndices) {
-        const doc = this.data[index];
-        if (doc === null) continue;
-        if (this.docMatchesQuery(doc, query)) results.push(index);
-      }
-      return results;
-    }
-    
-    if (bestPath?.type === 'btree') {
-      const indexTree = this.btreeIndexes[bestPath.key];
-      const queryValue = query[bestPath.key as keyof T];
-      const candidateIndices = new Set<number>();
-      const op = (typeof queryValue === 'object' && queryValue !== null) ? (queryValue as any) : { 'exact': queryValue };
-      
-      if (op.exact) {
-        const indices = indexTree.search(op.exact);
-        if (indices) indices.forEach(i => candidateIndices.add(i));
-      } else if (op.$in) {
-        for (const val of op.$in) {
-          const indices = indexTree.search(val);
-          if (indices) indices.forEach(i => candidateIndices.add(i));
-        }
-      } else {
-        const range = { $gt: op.$gt, $gte: op.$gte, $lt: op.$lt, $lte: op.$lte };
-        indexTree.range(range, (key, values) => {
-          values.forEach(i => candidateIndices.add(i));
-        });
-        if (op.$ne !== undefined) {
-          indexTree.range({}, (key, values) => {
-            if (key !== op.$ne) values.forEach(i => candidateIndices.add(i));
-          });
-        }
-      }
-      for (const index of candidateIndices) {
-        const doc = this.data[index];
-        if (doc === null) continue;
-        if (this.docMatchesQuery(doc, query)) results.push(index);
-      }
-      return results;
-    }
-
-    console.warn(`SonicDB Warning: Query is not acceleratable by any index. Performing full scan:`, query);
-    for (let i = 0; i < this.data.length; i++) {
-      const doc = this.data[i];
-      if (doc === null) continue;
-      if (this.docMatchesQuery(doc, query)) results.push(i);
-    }
-    return results;
   }
   
   /**
@@ -337,59 +128,31 @@ class SonicDB<T extends Document = Document> {
     if (this.cacheEnabled) {
       const cacheKey = JSON.stringify(query);
       const cachedResult = this.queryCache.get(cacheKey);
+      
       if (cachedResult) {
-        return cachedResult;
+        return cachedResult; // Cache HIT
       }
       
-      const results = this._runQuery(query);
+      // Cache MISS
+      const results = this.engine.runQuery(query, this.data);
       this.queryCache.set(cacheKey, results);
       return results;
 
     } else {
-      return this._runQuery(query);
+      // Cache is disabled
+      return this.engine.runQuery(query, this.data);
     }
   }
 
   /**
-   * [Private] Finds the first index, using the cache logic (less efficient).
+   * [Private] Finds the first index.
    */
   private _findIndex(query: Query<T>): number {
     const indices = this._findIndices(query);
     return indices.length > 0 ? indices[0] : -1;
   }
   
-  /**
-   * [Private] Checks if a doc matches a query.
-   */
-  private docMatchesQuery(doc: T, query: Query<T>): boolean {
-    for (const key in query) {
-      if (query.hasOwnProperty(key)) {
-        const docValue = doc[key as keyof T];
-        const queryValue = query[key as keyof T];
-        
-        if (typeof queryValue === 'object' && queryValue !== null && !Array.isArray(queryValue)) {
-          const operators = Object.keys(queryValue) as (keyof QueryOperators<any>)[];
-          for (const op of operators) {
-            const opValue = (queryValue as any)[op];
-            switch (op) {
-              case '$gt': if (!(docValue > opValue)) return false; break;
-              case '$gte': if (!(docValue >= opValue)) return false; break;
-              case '$lt': if (!(docValue < opValue)) return false; break;
-              case '$lte': if (!(docValue <= opValue)) return false; break;
-              case '$ne': if (!(docValue !== opValue)) return false; break;
-              case '$in': if (!Array.isArray(opValue) || !opValue.includes(docValue)) return false; break;
-              case '$nin': if (!Array.isArray(opValue) || opValue.includes(docValue)) return false; break;
-              default: console.warn(`SonicDB Warning: Unknown operator "${op}". Ignoring.`);
-            }
-          }
-        } else {
-          if (docValue !== queryValue) return false;
-        }
-      }
-    }
-    return true;
-  }
-  
+
   // --- PUBLIC API METHODS (Hooks + CRUD) ---
 
   public pre(event: HookEvent, fn: Function): void {
@@ -402,40 +165,32 @@ class SonicDB<T extends Document = Document> {
     if (!this.hooks[key]) this.hooks[key] = [];
     this.hooks[key].push(fn);
   }
-  private _runHooks(key: string, ...args: any[]): void {
-    const fns = this.hooks[key];
-    if (fns) {
-      for (const fn of fns) {
-        try { fn(...args); }
-        catch (error) { console.error(`SonicDB Hook Error (${key}): ${(error as Error).message}`); }
-      }
-    }
-  }
 
   public create(doc: T): T {
     this._runHooks(`pre:create`, doc);
     this._validate(doc);
-    this._checkUniqueness(doc, -1); 
+    this.engine.checkUniqueness(doc, -1); 
+    
     const newIndex = this.data.length;
     this.data.push(doc);
-    this._addToIndexes(doc, newIndex);
-    this._invalidateCache(); 
+    this.engine.addToIndexes(doc, newIndex);
+    
+    this._notifyChanges(); 
     this._runHooks(`post:create`, doc);
     return doc;
   }
 
   public loadData(dataArray: T[]): void {
     this.data = [];
-    this.indexTypes.forEach((type, key) => {
-      if (type === 'hash') this.hashIndexes[key].clear();
-      else if (type === 'btree') this.btreeIndexes[key] = new BTree(this.bTreeDegree);
-    });
+    this.engine.clearAllIndexes(); 
+    
     for (let i = 0; i < dataArray.length; i++) {
         const doc = dataArray[i];
         this.data.push(doc);
-        this._addToIndexes(doc, i);
+        this.engine.addToIndexes(doc, i);
     }
-    this._invalidateCache(); 
+    
+    this._notifyChanges(); // UPDATED
     console.log(`SonicDB: ${this.data.length} documents loaded and indexed.`);
   }
 
@@ -458,14 +213,19 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:update`, query, { modifiedCount: 0 });
       return null;
     }
+    
     this._validate(update);
-    this._checkUniqueness(update, indexToUpdate);
+    this.engine.checkUniqueness(update, indexToUpdate);
+    
     const oldDoc = this.data[indexToUpdate] as T;
-    this._removeFromIndexes(oldDoc, indexToUpdate);
+    this.engine.removeFromIndexes(oldDoc, indexToUpdate);
+    
     const newDoc = { ...oldDoc, ...update };
     this.data[indexToUpdate] = newDoc;
-    this._addToIndexes(newDoc, indexToUpdate);
-    this._invalidateCache(); 
+    
+    this.engine.addToIndexes(newDoc, indexToUpdate);
+    
+    this._notifyChanges(); // UPDATED
     this._runHooks(`post:update`, query, { modifiedCount: 1 });
     return newDoc;
   }
@@ -483,12 +243,12 @@ class SonicDB<T extends Document = Document> {
     
     for (const index of indicesToUpdate) {
       try {
-        this._checkUniqueness(update, index);
+        this.engine.checkUniqueness(update, index);
         const oldDoc = this.data[index] as T;
-        this._removeFromIndexes(oldDoc, index);
+        this.engine.removeFromIndexes(oldDoc, index);
         const newDoc = { ...oldDoc, ...update };
         this.data[index] = newDoc;
-        this._addToIndexes(newDoc, index);
+        this.engine.addToIndexes(newDoc, index);
         modifiedCount++;
       } catch (error) {
         console.error(`SonicDB Error: Could not update document at index ${index} due to: ${(error as Error).message}`);
@@ -496,7 +256,7 @@ class SonicDB<T extends Document = Document> {
     }
     
     if (modifiedCount > 0) {
-        this._invalidateCache(); 
+        this._notifyChanges(); 
     }
     
     const result = { modifiedCount };
@@ -511,10 +271,12 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:delete`, query, { deletedCount: 0 });
       return { deletedCount: 0 };
     }
+    
     const docToDelete = this.data[indexToDelete] as T;
-    this._removeFromIndexes(docToDelete, indexToDelete);
+    this.engine.removeFromIndexes(docToDelete, indexToDelete);
     this.data[indexToDelete] = null;
-    this._invalidateCache(); 
+    
+    this._notifyChanges(); 
     const result = { deletedCount: 1 };
     this._runHooks(`post:delete`, query, result);
     return result;
@@ -527,17 +289,59 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:delete`, query, { deletedCount: 0 });
       return { deletedCount: 0 };
     }
+    
     for (const index of indicesToDelete) {
       const docToDelete = this.data[index] as T;
-      this._removeFromIndexes(docToDelete, index);
+      this.engine.removeFromIndexes(docToDelete, index);
       this.data[index] = null;
     }
-    this._invalidateCache(); 
+    
+    this._notifyChanges();
     const result = { deletedCount: indicesToDelete.length };
     this._runHooks(`post:delete`, query, result);
     return result;
   }
-}
+
+  public find$(query: Query<T>): { subscribe: (callback: (results: T[]) => void) => Subscription } {
+    // 'this' refers to the SonicDB instance
+    const db = this;
+
+    const observable = {
+      subscribe: (callback: (results: T[]) => void): Subscription => {
+        // 1. Create the subscription object
+        const subscription: InternalSubscription<T> = {
+          query: query,
+          callback: callback
+        };
+
+        // 2. Add it to the main list
+        db.subscriptions.push(subscription);
+
+        // 3. Run the query immediately with the initial data
+        try {
+          const initialResults = db.find(query);
+          callback(initialResults);
+        } catch (error) {
+          console.error("SonicDB Error: Failed to run initial query for subscription:", error);
+        }
+
+        // 4. Return the 'unsubscribe' method
+        return {
+          unsubscribe: () => {
+            // Remove this subscription from the list
+            const index = db.subscriptions.indexOf(subscription);
+            if (index > -1) {
+              db.subscriptions.splice(index, 1);
+            }
+          }
+        };
+      }
+    };
+    
+    return observable;
+  }
+
+} // --- End of SonicDB Class ---
 
 // Hook Overloads
 declare interface SonicDB<T extends Document = Document> {
