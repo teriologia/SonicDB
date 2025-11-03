@@ -120,13 +120,33 @@ class SonicDB<T extends Document = Document> {
       }
     }
   }
+  /**
+   * [Private] Creates a fast, simple (but naive) cache key from a query object.
+   * Faster than JSON.stringify
+   * NOTE: Does not handle key order (e.g., {a:1, b:2} != {b:2, a:1})
+   */
+  private _getCacheKey(query: Query<T>): string {
+    let key = '';
+    for (const k in query) {
+      const v = query[k as keyof T];
+      if (typeof v === 'object' && v !== null) {
+        key += `${k}:`;
+        for(const op in (v as any)) {
+          key += `$${op}:${(v as any)[op]}_`;
+        }
+      } else {
+        key += `${k}:${v}_`;
+      }
+    }
+    return key;
+  }
   
   /**
    * [Private] Finds all indices, using the cache if enabled.
    */
   private _findIndices(query: Query<T>): number[] {
     if (this.cacheEnabled) {
-      const cacheKey = JSON.stringify(query);
+      const cacheKey = this._getCacheKey(query);
       const cachedResult = this.queryCache.get(cacheKey);
       
       if (cachedResult) {
