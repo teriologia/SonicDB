@@ -209,7 +209,6 @@ class SonicDB<T extends Document = Document> {
 
     this._notifyChanges();
     this._runHooks(`post:create`, doc);
-    this._triggerAutoSave();
     return doc;
   }
 
