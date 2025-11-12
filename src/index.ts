@@ -420,3 +420,5 @@ declare interface SonicDB<T extends Document = Document> {
 }
 
 export default SonicDB;
+
+export * from './core/types';
