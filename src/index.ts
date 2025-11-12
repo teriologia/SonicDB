@@ -14,7 +14,8 @@ import {
   PreDeleteCallback,
   PostDeleteCallback,
   Subscription,
-  InternalSubscription 
+  InternalSubscription,
+  PersistencePlugin
 } from './core/types';
 
 
@@ -26,27 +27,30 @@ class SonicDB<T extends Document = Document> {
   // --- Core Systems ---
   private engine: QueryEngine<T>;
   private schema: SchemaDefinition;
-  
+
   // --- Data & State ---
   private data: (T | null)[];
-  
+
   // --- Add-on Systems ---
   private hooks: { [key: string]: Function[] } = {};
   private queryCache: Map<string, number[]>;
   private cacheEnabled: boolean;
-  
-  // NEW: Reactivity Property
+
+  // --- Reactivity Property ---
   private subscriptions: InternalSubscription<T>[] = [];
+
+  //NEW: persistance options
+  private persistencePlugin: PersistencePlugin<T> | null = null;
 
   constructor(options: SonicDBOptions = {}) {
     this.schema = options.schema || {};
     this.data = [];
     this.hooks = {};
-    
+
     // Initialize Cache
     this.cacheEnabled = options.enableQueryCache ?? true;
     this.queryCache = new Map<string, number[]>();
-    
+
     // Initialize the Engine
     this.engine = new QueryEngine<T>(
       options.indexOn || [],
@@ -55,24 +59,24 @@ class SonicDB<T extends Document = Document> {
   }
 
   // --- PRIVATE HELPERS (Cache, Validation, Hooks) ---
-  
+
   private _notifyChanges(): void {
     // 1. Invalidate the static query cache
     if (this.cacheEnabled) {
       this.queryCache.clear();
       // console.log("SonicDB Debug: Query cache invalidated.");
     }
-    
+
     // 2. Notify all active subscribers (Reactivity)
     if (this.subscriptions.length > 0) {
       // console.log(`SonicDB Debug: Notifying ${this.subscriptions.length} subscribers.`);
-      
+
       // Re-run every active "live" query
       for (const sub of this.subscriptions) {
         try {
           // Re-run the query. This will be a cache-miss
-          const newResults = this.find(sub.query); 
-          
+          const newResults = this.find(sub.query);
+
           sub.callback(newResults);
         } catch (error) {
           console.error(`SonicDB Error: Failed to update subscription for query:`, sub.query, error);
@@ -86,7 +90,7 @@ class SonicDB<T extends Document = Document> {
    */
   private _validate(doc: Partial<T>): void {
     if (!this.schema || Object.keys(this.schema).length === 0) return;
-    
+
     for (const key in this.schema) {
       if (doc.hasOwnProperty(key)) {
         const expectedType = this.schema[key];
@@ -100,14 +104,14 @@ class SonicDB<T extends Document = Document> {
           case Array: typeIsValid = Array.isArray(actualValue); break;
           case Object: typeIsValid = typeof actualValue === 'object' && actualValue !== null && !Array.isArray(actualValue); break;
         }
-        
+
         if (!typeIsValid) {
           throw new Error(`Schema Validation Failed: '${key}' must be of type '${expectedType.name}'. Received: ${typeof actualValue}`);
         }
       }
     }
   }
-  
+
   /**
    * [Private] Runs all registered hooks for a specific event.
    */
@@ -131,7 +135,7 @@ class SonicDB<T extends Document = Document> {
       const v = query[k as keyof T];
       if (typeof v === 'object' && v !== null) {
         key += `${k}:`;
-        for(const op in (v as any)) {
+        for (const op in (v as any)) {
           key += `$${op}:${(v as any)[op]}_`;
         }
       } else {
@@ -140,7 +144,7 @@ class SonicDB<T extends Document = Document> {
     }
     return key;
   }
-  
+
   /**
    * [Private] Finds all indices, using the cache if enabled.
    */
@@ -148,11 +152,11 @@ class SonicDB<T extends Document = Document> {
     if (this.cacheEnabled) {
       const cacheKey = this._getCacheKey(query);
       const cachedResult = this.queryCache.get(cacheKey);
-      
+
       if (cachedResult) {
         return cachedResult; // Cache HIT
       }
-      
+
       // Cache MISS
       const results = this.engine.runQuery(query, this.data);
       this.queryCache.set(cacheKey, results);
@@ -171,7 +175,15 @@ class SonicDB<T extends Document = Document> {
     const indices = this._findIndices(query);
     return indices.length > 0 ? indices[0] : -1;
   }
-  
+
+  private async _triggerAutoSave(): Promise<void> {
+        if (this.persistencePlugin) {
+             this.save().catch(error => {
+                 console.error("SonicDB Auto-Save Failed:", error);
+             });
+        }
+    }
+
 
   // --- PUBLIC API METHODS (Hooks + CRUD) ---
 
@@ -189,27 +201,28 @@ class SonicDB<T extends Document = Document> {
   public create(doc: T): T {
     this._runHooks(`pre:create`, doc);
     this._validate(doc);
-    this.engine.checkUniqueness(doc, -1); 
-    
+    this.engine.checkUniqueness(doc, -1);
+
     const newIndex = this.data.length;
     this.data.push(doc);
     this.engine.addToIndexes(doc, newIndex);
-    
-    this._notifyChanges(); 
+
+    this._notifyChanges();
     this._runHooks(`post:create`, doc);
+    this._triggerAutoSave();
     return doc;
   }
 
   public loadData(dataArray: T[]): void {
     this.data = [];
-    this.engine.clearAllIndexes(); 
-    
+    this.engine.clearAllIndexes();
+
     for (let i = 0; i < dataArray.length; i++) {
-        const doc = dataArray[i];
-        this.data.push(doc);
-        this.engine.addToIndexes(doc, i);
+      const doc = dataArray[i];
+      this.data.push(doc);
+      this.engine.addToIndexes(doc, i);
     }
-    
+
     this._notifyChanges(); // UPDATED
     console.log(`SonicDB: ${this.data.length} documents loaded and indexed.`);
   }
@@ -233,19 +246,19 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:update`, query, { modifiedCount: 0 });
       return null;
     }
-    
+
     this._validate(update);
     this.engine.checkUniqueness(update, indexToUpdate);
-    
+
     const oldDoc = this.data[indexToUpdate] as T;
     this.engine.removeFromIndexes(oldDoc, indexToUpdate);
-    
+
     const newDoc = { ...oldDoc, ...update };
     this.data[indexToUpdate] = newDoc;
-    
+
     this.engine.addToIndexes(newDoc, indexToUpdate);
-    
-    this._notifyChanges(); // UPDATED
+
+    this._notifyChanges();
     this._runHooks(`post:update`, query, { modifiedCount: 1 });
     return newDoc;
   }
@@ -255,12 +268,12 @@ class SonicDB<T extends Document = Document> {
     this._validate(update);
     const indicesToUpdate = this._findIndices(query);
     let modifiedCount = 0;
-    
+
     if (indicesToUpdate.length === 0) {
-       this._runHooks(`post:update`, query, { modifiedCount: 0 });
-       return { modifiedCount: 0 };
+      this._runHooks(`post:update`, query, { modifiedCount: 0 });
+      return { modifiedCount: 0 };
     }
-    
+
     for (const index of indicesToUpdate) {
       try {
         this.engine.checkUniqueness(update, index);
@@ -274,11 +287,11 @@ class SonicDB<T extends Document = Document> {
         console.error(`SonicDB Error: Could not update document at index ${index} due to: ${(error as Error).message}`);
       }
     }
-    
+
     if (modifiedCount > 0) {
-        this._notifyChanges(); 
+      this._notifyChanges();
     }
-    
+
     const result = { modifiedCount };
     this._runHooks(`post:update`, query, result);
     return result;
@@ -291,12 +304,12 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:delete`, query, { deletedCount: 0 });
       return { deletedCount: 0 };
     }
-    
+
     const docToDelete = this.data[indexToDelete] as T;
     this.engine.removeFromIndexes(docToDelete, indexToDelete);
     this.data[indexToDelete] = null;
-    
-    this._notifyChanges(); 
+
+    this._notifyChanges();
     const result = { deletedCount: 1 };
     this._runHooks(`post:delete`, query, result);
     return result;
@@ -309,13 +322,13 @@ class SonicDB<T extends Document = Document> {
       this._runHooks(`post:delete`, query, { deletedCount: 0 });
       return { deletedCount: 0 };
     }
-    
+
     for (const index of indicesToDelete) {
       const docToDelete = this.data[index] as T;
       this.engine.removeFromIndexes(docToDelete, index);
       this.data[index] = null;
     }
-    
+
     this._notifyChanges();
     const result = { deletedCount: indicesToDelete.length };
     this._runHooks(`post:delete`, query, result);
@@ -357,9 +370,42 @@ class SonicDB<T extends Document = Document> {
         };
       }
     };
-    
+
     return observable;
   }
+
+  // persist section NEW!
+  public usePersistence(plugin: PersistencePlugin<T>): void {
+    this.persistencePlugin = plugin;
+    console.log(`SonicDB: Persistence plugin '${plugin.name}' registered.`);
+  }
+
+  public async loadPersistentData(): Promise<boolean> {
+    if (!this.persistencePlugin) {
+      console.warn("SonicDB: No persistence plugin is registered.");
+      return false;
+    }
+
+    const loadedData = await this.persistencePlugin.loadData();
+
+    if (loadedData && loadedData.length > 0) {
+      this.loadData(loadedData);
+      console.log(`SonicDB: Successfully loaded ${loadedData.length} documents from persistence.`);
+      return true;
+    }
+
+    console.log("SonicDB: No persistent data found. Starting with empty database.");
+    return false;
+  }
+
+  public async save(): Promise<void> {
+        if (!this.persistencePlugin) return;
+
+        const dataToSave = this.data.filter(doc => doc !== null) as T[];
+
+        await this.persistencePlugin.saveData(dataToSave);
+        console.log(`SonicDB: Successfully saved ${dataToSave.length} documents.`);
+    }
 
 } // --- End of SonicDB Class ---
 

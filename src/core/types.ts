@@ -64,3 +64,11 @@ export interface InternalSubscription<T> {
   query: Query<T>;
   callback: (results: T[]) => void;
 }
+
+
+export interface PersistencePlugin<T extends Document> {
+
+    name: string;
+    saveData(data: (T | null)[]): Promise<void>;
+    loadData(): Promise<T[] | null>;
+}
