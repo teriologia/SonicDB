@@ -181,6 +181,20 @@ console.log(sonic);
 
 ---
 
+## 💾 Persistence Plugins (Ecosystem)
+
+SonicDB is designed as a strictly **in-memory** database to ensure maximum performance and zero external dependencies. 
+
+However, real-world applications need to save data. Instead of bloating the core package, we provide **official, modular plugins** for different environments. Install only what you need.
+
+| Environment | Package | Storage Engine | Status |
+| :--- | :--- | :--- | :--- |
+| **Node.js** | [`@teriologia/sonicdb-persistence-node`](https://github.com/teriologia/SonicDB-persistence-node) | Native `fs` (JSON File) | ✅ **Stable** |
+| **Web / Browser** | [`@teriologia/sonicdb-persistence-web`](https://github.com/teriologia/SonicDB-persistence-web) | Native **IndexedDB** | ✅ **Stable** |
+| **React Native** | `@teriologia/sonicdb-persistence-rn` | AsyncStorage / SQLite | 🚧 **WIP** |
+
+---
+
 ## 🚀 Performance: The SonicDB Advantage
 
 Saying "fast" is easy. Proving it is better. The following benchmarks were run on a collection of **100,000 documents** to demonstrate why `SonicDB`'s intelligent indexing is critical.
